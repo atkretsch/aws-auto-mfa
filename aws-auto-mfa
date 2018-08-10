@@ -16,7 +16,10 @@ if [[ -z ${AWS_PROFILE+x} ]]; then
 fi
 BKP_AWS_PROFILE=$AWS_PROFILE
 
+# determine if auto-mfa is enabled for the active profile
 USE_AUTO_MFA=`$AWS_CMD configure get profile.$AWS_PROFILE.use_auto_mfa`
+# trim whitespace/EOL characters
+USE_AUTO_MFA="$(echo -e "${USE_AUTO_MFA}" | tr -d '[:space:]')"
 if [ "$USE_AUTO_MFA" != "true" ]; then
     # just pass-through to the base AWS command
     $AWS_CMD $@
@@ -61,9 +64,7 @@ rm $AWS_ERR_TMP
 
 if [ $NEEDS_AUTH -eq 1 ]; then
     # restore previous profile (temporarily)
-    if ! [[ -z ${BKP_AWS_PROFILE+x} ]]; then
-        AWS_PROFILE=$BKP_AWS_PROFILE
-    fi
+    AWS_PROFILE=$BKP_AWS_PROFILE
 
     # find MFA device (assumes first in list)
     MFA_DEVICE=`aws iam list-mfa-devices --output text | head -1 | cut -f3`
@@ -95,6 +96,6 @@ if [ $NEEDS_AUTH -eq 1 ]; then
     $AWS_CMD configure set profile.$AWS_AUTO_MFA_PROFILE.region $REGION
 
     # run command again under MFA profile
-    export AWS_PROFILE=$AWS_AUTO_MFA_PROFILE
+    AWS_PROFILE=$AWS_AUTO_MFA_PROFILE
     $AWS_CMD $@
 fi
