@@ -17,7 +17,7 @@ fi
 BKP_AWS_PROFILE=$AWS_PROFILE
 
 USE_AUTO_MFA=`aws configure get profile.$AWS_PROFILE.use_auto_mfa`
-if [ ! $USE_AUTO_MFA -eq 1 ]; then
+if [ "$USE_AUTO_MFA" != "true" ]; then
     # just pass-through to the base AWS command
     $AWS_CMD $@
     exit $?
