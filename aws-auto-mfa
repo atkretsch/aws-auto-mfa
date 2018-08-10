@@ -1,0 +1,102 @@
+#!/bin/bash
+
+# set -x
+
+AWS_CMD=aws
+TEST_CMD="aws s3api list-buckets"
+MFA_PROFILE=aws-cli-auto-mfa
+
+# get region from current config
+REGION=`aws configure get region`
+
+# back up existing AWS credentials
+if ! [[ -z ${AWS_PROFILE+x} ]]; then
+    BKP_AWS_PROFILE=$AWS_PROFILE
+fi
+if ! [[ -z ${AWS_ACCESS_KEY_ID+x} ]]; then
+    BKP_AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+fi
+if ! [[ -z ${AWS_SECRET_ACCESS_KEY+x} ]]; then
+    BKP_AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+fi
+if ! [[ -z ${AWS_SESSION_TOKEN+x} ]]; then
+    BKP_AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
+fi
+
+# if MFA profile doesn't already exist, create it
+if ! aws configure get profile.$MFA_PROFILE.aws_access_key_id > /dev/null; then
+    $AWS_CMD configure set profile.$MFA_PROFILE.aws_access_key_id dummy
+    $AWS_CMD configure set profile.$MFA_PROFILE.aws_secret_access_key dummy
+    $AWS_CMD configure set profile.$MFA_PROFILE.aws_session_token dummy
+fi
+$AWS_CMD configure set profile.$MFA_PROFILE.region $REGION
+
+# clear credentials and point to MFA profile to test access
+unset AWS_ACCESS_KEY_ID
+unset AWS_SECRET_ACCESS_KEY
+unset AWS_SESSION_TOKEN
+export AWS_PROFILE=$MFA_PROFILE
+
+# try the command under the MFA profile, capture stderr in a variable so we can check for auth errors
+AWS_ERROR=$(aws $@ 3>&1 1>&2 2>&3 | tee >(cat - >&2) ; test ${PIPESTATUS[0]} -eq 0)
+AWS_EXIT_CODE=$?
+
+NEEDS_AUTH=0
+if [ $AWS_EXIT_CODE -ne 0 ]; then
+    echo "$AWS_ERROR" | grep AuthFailure > /dev/null
+    AUTH_GREP_ERROR=$?
+    echo "$AWS_ERROR" | grep RequestExpired > /dev/null
+    EXP_GREP_ERROR=$?
+    if [ $AUTH_GREP_ERROR -eq 0 ] || [ $EXP_GREP_ERROR -eq 0 ]; then
+        NEEDS_AUTH=1
+    fi
+fi
+
+if [ $NEEDS_AUTH -eq 1 ]; then
+    # restore previous credentials (temporarily)
+    if ! [[ -z ${BKP_AWS_PROFILE+x} ]]; then
+        AWS_PROFILE=$BKP_AWS_PROFILE
+    fi
+    if ! [[ -z ${BKP_AWS_ACCESS_KEY_ID+x} ]]; then
+        AWS_ACCESS_KEY_ID=$BKP_AWS_ACCESS_KEY_ID
+    fi
+    if ! [[ -z ${BKP_AWS_SECRET_ACCESS_KEY+x} ]]; then
+        AWS_SECRET_ACCESS_KEY=$BKP_AWS_SECRET_ACCESS_KEY
+    fi
+    if ! [[ -z ${BKP_AWS_SESSION_TOKEN+x} ]]; then
+        AWS_SESSION_TOKEN=$BKP_AWS_SESSION_TOKEN
+    fi
+
+    # find MFA device (assumes first in list)
+    MFA_DEVICE=`aws iam list-mfa-devices --output text | head -1 | cut -f3`
+    if [ $? -ne 0 ]; then
+        exit $?
+    fi
+
+    # prompt for MFA code, if not provided via env var
+    if [ -z $AWS_MFA_CODE ] ; then
+        read -p "MFA code for $MFA_DEVICE: " AWS_MFA_CODE
+    fi
+
+    # acquire session token
+    STS_OUTPUT=`aws sts get-session-token \
+        --output text --duration-seconds 43200 \--serial-number $MFA_DEVICE --token-code $AWS_MFA_CODE`
+    if [ $? -ne 0 ]; then
+        exit $?
+    fi
+    MFA_ACCESS_KEY_ID=`echo $STS_OUTPUT | cut -d' ' -f2`
+    MFA_SECRET_ACCESS_KEY=`echo $STS_OUTPUT | cut -d' ' -f4`
+    MFA_SESSION_TOKEN=`echo $STS_OUTPUT | cut -d' ' -f5`
+
+    # configure MFA profile with session token values
+    $AWS_CMD configure set aws_access_key_id $MFA_ACCESS_KEY_ID --profile $MFA_PROFILE
+    $AWS_CMD configure set aws_secret_access_key $MFA_SECRET_ACCESS_KEY --profile $MFA_PROFILE
+    $AWS_CMD configure set aws_session_token $MFA_SESSION_TOKEN --profile $MFA_PROFILE 
+
+    # inherit region from calling context
+    $AWS_CMD configure set profile.$MFA_PROFILE.region $REGION
+
+    # run command again under MFA profile
+    export AWS_PROFILE=$MFA_PROFILE
+    $AWS_CMD $@
+fi
