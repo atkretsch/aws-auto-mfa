@@ -16,7 +16,7 @@ if [[ -z ${AWS_PROFILE+x} ]]; then
 fi
 BKP_AWS_PROFILE=$AWS_PROFILE
 
-USE_AUTO_MFA=`aws configure get profile.$AWS_PROFILE.use_auto_mfa`
+USE_AUTO_MFA=`$AWS_CMD configure get profile.$AWS_PROFILE.use_auto_mfa`
 if [ "$USE_AUTO_MFA" != "true" ]; then
     # just pass-through to the base AWS command
     $AWS_CMD $@
@@ -24,7 +24,7 @@ if [ "$USE_AUTO_MFA" != "true" ]; then
 fi
 
 # get region from current config
-REGION=`aws configure get region`
+REGION=`$AWS_CMD configure get region`
 
 AWS_AUTO_MFA_PROFILE=${AWS_AUTO_MFA_PROFILE:-$AWS_PROFILE-auto-mfa}
 
@@ -43,19 +43,21 @@ unset AWS_SESSION_TOKEN
 AWS_PROFILE=$AWS_AUTO_MFA_PROFILE
 
 # try the command under the MFA profile, capture stderr in a variable so we can check for auth errors
-AWS_ERROR=$(aws $@ 3>&1 1>&2 2>&3 | tee >(cat - >&2) ; test ${PIPESTATUS[0]} -eq 0)
+AWS_ERR_TMP=$(mktemp /tmp/aws-auto-mfa.err.XXXXXX)
+$AWS_CMD $@ 2> $AWS_ERR_TMP
 AWS_EXIT_CODE=$?
+if [ -s $AWS_ERR_TMP ]; then
+    cat $AWS_ERR_TMP 1>&2
+fi
 
 NEEDS_AUTH=0
 if [ $AWS_EXIT_CODE -ne 0 ]; then
-    echo "$AWS_ERROR" | grep AuthFailure > /dev/null
-    AUTH_GREP_ERROR=$?
-    echo "$AWS_ERROR" | grep RequestExpired > /dev/null
-    EXP_GREP_ERROR=$?
-    if [ $AUTH_GREP_ERROR -eq 0 ] || [ $EXP_GREP_ERROR -eq 0 ]; then
+    if cat $AWS_ERR_TMP | grep -e AuthFailure -e RequestExpired > /dev/null ; then
         NEEDS_AUTH=1
     fi
 fi
+
+rm $AWS_ERR_TMP
 
 if [ $NEEDS_AUTH -eq 1 ]; then
     # restore previous profile (temporarily)
