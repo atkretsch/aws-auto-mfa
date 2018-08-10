@@ -12,7 +12,7 @@ Bash utility to make using the AWS CLI with MFA easier.  Automatically detects a
 `aws-auto-mfa` uses config profiles under the hood.  For more information on creating profiles, see the [AWS CLI documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-getting-started.html).
 
 Once you've created a profile, follow the steps below to set it up for automatic MFA authentication (*note: replace `YOUR_PROFILE_NAME` with the actual name of the profile you wish to configure*):
-1. `aws configure set profile.YOUR_PROFILE_NAME.use_auto_mfa 1`
+1. `aws configure set profile.YOUR_PROFILE_NAME.use_auto_mfa true`
     * *Note: this command can be run with or without the alias described above*
 2. `export AWS_PROFILE=YOUR_PROFILE_NAME`
 3. Run an AWS CLI command.  If authentication fails, you will be prompted for an MFA code, e.g.:
