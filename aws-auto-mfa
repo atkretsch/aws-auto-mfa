@@ -3,24 +3,30 @@
 # set -x
 
 AWS_CMD=${AWS_CMD:-aws}
-AWS_AUTO_MFA_PROFILE=${AWS_AUTO_MFA_PROFILE:-aws-cli-auto-mfa}
+
+if ! [[ -z ${AWS_ACCESS_KEY_ID+x} ]]; then
+    # just pass-through to the base AWS command
+    $AWS_CMD $@
+    exit $?
+fi
+
+if [[ -z ${AWS_PROFILE+x} ]]; then
+    echo "AWS_PROFILE is not set"
+    exit 1
+fi
+BKP_AWS_PROFILE=$AWS_PROFILE
+
+USE_AUTO_MFA=`aws configure get profile.$AWS_PROFILE.use_auto_mfa`
+if [ ! $USE_AUTO_MFA -eq 1 ]; then
+    # just pass-through to the base AWS command
+    $AWS_CMD $@
+    exit $?
+fi
 
 # get region from current config
 REGION=`aws configure get region`
 
-# back up existing AWS credentials
-if ! [[ -z ${AWS_PROFILE+x} ]]; then
-    BKP_AWS_PROFILE=$AWS_PROFILE
-fi
-if ! [[ -z ${AWS_ACCESS_KEY_ID+x} ]]; then
-    BKP_AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-fi
-if ! [[ -z ${AWS_SECRET_ACCESS_KEY+x} ]]; then
-    BKP_AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
-fi
-if ! [[ -z ${AWS_SESSION_TOKEN+x} ]]; then
-    BKP_AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN
-fi
+AWS_AUTO_MFA_PROFILE=${AWS_AUTO_MFA_PROFILE:-$AWS_PROFILE-auto-mfa}
 
 # if MFA profile doesn't already exist, create it
 if ! aws configure get profile.$AWS_AUTO_MFA_PROFILE.aws_access_key_id > /dev/null; then
@@ -30,11 +36,11 @@ if ! aws configure get profile.$AWS_AUTO_MFA_PROFILE.aws_access_key_id > /dev/nu
 fi
 $AWS_CMD configure set profile.$AWS_AUTO_MFA_PROFILE.region $REGION
 
-# clear credentials and point to MFA profile to test access
+# clear any credentials and point to MFA profile
 unset AWS_ACCESS_KEY_ID
 unset AWS_SECRET_ACCESS_KEY
 unset AWS_SESSION_TOKEN
-export AWS_PROFILE=$AWS_AUTO_MFA_PROFILE
+AWS_PROFILE=$AWS_AUTO_MFA_PROFILE
 
 # try the command under the MFA profile, capture stderr in a variable so we can check for auth errors
 AWS_ERROR=$(aws $@ 3>&1 1>&2 2>&3 | tee >(cat - >&2) ; test ${PIPESTATUS[0]} -eq 0)
@@ -52,18 +58,9 @@ if [ $AWS_EXIT_CODE -ne 0 ]; then
 fi
 
 if [ $NEEDS_AUTH -eq 1 ]; then
-    # restore previous credentials (temporarily)
+    # restore previous profile (temporarily)
     if ! [[ -z ${BKP_AWS_PROFILE+x} ]]; then
         AWS_PROFILE=$BKP_AWS_PROFILE
-    fi
-    if ! [[ -z ${BKP_AWS_ACCESS_KEY_ID+x} ]]; then
-        AWS_ACCESS_KEY_ID=$BKP_AWS_ACCESS_KEY_ID
-    fi
-    if ! [[ -z ${BKP_AWS_SECRET_ACCESS_KEY+x} ]]; then
-        AWS_SECRET_ACCESS_KEY=$BKP_AWS_SECRET_ACCESS_KEY
-    fi
-    if ! [[ -z ${BKP_AWS_SESSION_TOKEN+x} ]]; then
-        AWS_SESSION_TOKEN=$BKP_AWS_SESSION_TOKEN
     fi
 
     # find MFA device (assumes first in list)
