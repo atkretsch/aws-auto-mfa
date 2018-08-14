@@ -55,7 +55,7 @@ fi
 
 NEEDS_AUTH=0
 if [ $AWS_EXIT_CODE -ne 0 ]; then
-    if cat $AWS_ERR_TMP | grep -e AuthFailure -e RequestExpired > /dev/null ; then
+    if cat $AWS_ERR_TMP | grep -e AuthFailure -e RequestExpired -e InvalidClientTokenId > /dev/null ; then
         NEEDS_AUTH=1
     fi
 fi
